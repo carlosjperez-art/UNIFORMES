@@ -295,10 +295,10 @@ function ghErr(st,m){if(st===401)return "El token de GitHub no es válido o venc
 async function ghApi(path,opt){opt=opt||{};const R=ghRepo();const r=await fetch("https://api.github.com/repos/"+R.owner+"/"+R.repo+path,Object.assign({},opt,{headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+GH.token}}));
   if(!r.ok){let m="";try{m=(await r.json()).message}catch(e){}const er=new Error(ghErr(r.status,m));er.status=r.status;throw er}return r.json()}
 async function ghGet(){const R=ghRepo();try{const j=await ghApi("/contents/"+R.path+"?ref="+encodeURIComponent(R.branch)+"&t="+Date.now());return {sha:j.sha,data:JSON.parse(new TextDecoder().decode(unb64(String(j.content||"").replace(/\s/g,""))))}}catch(e){if(e.status===404)return {sha:null,data:null};throw e}}
-function snapshot(){return {version:2,actualizado:S.actualizado||new Date().toISOString(),actualizadoPor:S.actualizadoPor||"",adminHash:S.adminHash||"",gh:S.gh||{},
+function snapshot(){return {version:2,actualizado:S.actualizado||new Date().toISOString(),actualizadoPor:S.actualizadoPor||"",adminHash:S.adminHash||"",admins:S.admins||[],gh:S.gh||{},
   settings:S.settings,meta:S.meta,log:S.log||[],stock:S.stock,pedidos:S.pedidos||[],eliminados:(S.eliminados||[]).slice(-500)}}
 function applyData(d){if(!d)return;S.stock=d.stock||null;S.meta=d.meta||null;S.log=d.log||[];if(d.settings)S.settings=d.settings;S.pedidos=d.pedidos||[];
-  S.eliminados=d.eliminados||[];if(d.adminHash)S.adminHash=d.adminHash;S.gh=d.gh||S.gh||{};S.actualizado=d.actualizado||d.exportado||"";S.actualizadoPor=d.actualizadoPor||"";S.base=S.actualizado}
+  S.eliminados=d.eliminados||[];if(d.adminHash)S.adminHash=d.adminHash;S.admins=Array.isArray(d.admins)?d.admins:(S.admins||[]);S.gh=d.gh||S.gh||{};S.actualizado=d.actualizado||d.exportado||"";S.actualizadoPor=d.actualizadoPor||"";S.base=S.actualizado}
 function mergeData(remote,local){const out=Object.assign({},local);const del={};(remote.eliminados||[]).concat(local.eliminados||[]).forEach(x=>{if(!del[x.id]||del[x.id]<x.at)del[x.id]=x.at});
   const map={};(remote.pedidos||[]).concat(local.pedidos||[]).forEach(p=>{const o=map[p.id];if(!o||(p.updatedAt||"")>=(o.updatedAt||""))map[p.id]=p});
   out.pedidos=Object.values(map).filter(p=>!del[p.id]||del[p.id]<(p.updatedAt||""));out.eliminados=Object.keys(del).map(id=>({id,at:del[id]}));
@@ -311,6 +311,18 @@ async function ghPublish(retry){const R=ghRepo();const cur=await ghGet();let out
   const body={message:"Datos actualizados por "+(S.actualizadoPor||"administrador"),content:b64(new TextEncoder().encode(JSON.stringify(out))),branch:R.branch};if(cur.sha)body.sha=cur.sha;
   try{await ghApi("/contents/"+R.path,{method:"PUT",body:JSON.stringify(body)})}catch(e){if(!retry&&(e.status===409||e.status===422))return ghPublish(true);throw e}
   applyData(out)}
+/* ---------- administradores ---------- */
+const BUILTIN={user:"carlosj.perez",name:"Carlos Pérez",hash:"691922ba9f4ca43d5499716d460d1b6bb1278f713b0194dfbf6da8acfb569fcc"};
+const uHash=(u,pw)=>sha256(String(u).trim().toLowerCase()+":"+pw);
+const rndKey=()=>b64(crypto.getRandomValues(new Uint8Array(24)));
+const rndPass=()=>{const c="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";let x="";const r=crypto.getRandomValues(new Uint8Array(10));r.forEach(v=>x+=c[v%c.length]);return x.slice(0,4)+"-"+x.slice(4)};
+function adminRec(u){u=String(u||"").trim().toLowerCase();return (S.admins||[]).find(a=>a.user===u)}
+function saveSession(){try{sessionStorage.setItem("uf_adm",JSON.stringify({u:S.me.user,n:S.me.name,h:(adminRec(S.me.user)||{}).hash||BUILTIN.hash,k:S.K||"",t:GH.token||""}))}catch(e){}}
+async function setMyPass(np){const u=S.me.user;let r=adminRec(u);const now=new Date().toISOString();
+  if(!r){r={user:u,name:S.me.name||u,creado:now};S.admins=(S.admins||[]).concat([r])}
+  r.hash=uHash(u,np);r.mustChange=false;r.actualizado=now;
+  if(CRYPTO_OK){if(!S.K)S.K=rndKey();r.kEnc=await encTok(S.K,np);if(GH.token&&!(S.gh&&S.gh.tokenK))S.gh=Object.assign({},S.gh,{tokenK:await encTok(GH.token,S.K),tokenEnc:null})}
+  S.pass=np;saveSession();persist()}
 function persist(){if(HAS_GAS)return;S.actualizado=new Date().toISOString();S.actualizadoPor=S.email||S.actualizadoPor||"";S.dirty=true;publish()}
 function markDirty(){persist()}
 async function publish(){if(!GH.token){syncChip();return}if(GH.busy){GH.pending=true;return}
@@ -322,7 +334,7 @@ function syncChip(){const c=$("#syncChip");if(!c)return;if(!S.isAdmin||HAS_GAS){
   c.textContent=t;c.className="sync "+k;c.title=GH.err||""}
 window.addEventListener("beforeunload",e=>{if(S.dirty||GH.busy){e.preventDefault();e.returnValue=""}});
 function downloadJSON(){const out=snapshot();const url=URL.createObjectURL(new Blob([JSON.stringify(out)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="datos.json";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);toast("Descargado datos.json: súbelo al repositorio reemplazando el anterior")}
-async function pullRemote(){if(HAS_GAS||location.protocol==="file:")return;if(S.dirty||GH.busy||(S.drawer&&S.drawer.type==="form"))return;
+async function pullRemote(){if(HAS_GAS||location.protocol==="file:")return;if(S.dirty||GH.busy||(S.drawer&&["form","pass","login"].indexOf(S.drawer.type)>=0))return;
   try{const r=await fetch("datos.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const d=await r.json();
     if((d.actualizado||"")>(S.actualizado||"")){applyData(d);render()}}catch(e){}}
 function api(fn,...args){return new Promise((res,rej)=>{google.script.run.withSuccessHandler(res).withFailureHandler(e=>rej(e))[fn](...args)})}
@@ -441,7 +453,7 @@ function render(){
   const V={resumen:vResumen,familias:vFamilias,pedidos:vPedidos,cronograma:vGantt,ceros:vCeros,carga:vCarga}[S.view]||vResumen;
   const dirtyB=S.isAdmin&&!HAS_GAS&&(GH.status==="err"||(S.dirty&&!GH.token))?'<div class="banner warn" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+(GH.status==="err"?'<b>No se pudo publicar en GitHub.</b> '+esc(GH.err)+' <button class="btn sm pri" data-act="pubNow">Reintentar</button>':'<b>Tienes cambios sin publicar.</b> Conecta GitHub en Actualizar datos para que se publiquen solos, o descarga datos.json y súbelo al repositorio. <button class="btn sm pri" data-act="dlJson">Descargar datos.json</button><button class="btn sm" data-act="goGh">Conectar GitHub</button>')+'</div>':"";
   app.innerHTML=dirtyB+(S.dbErr?'<div class="banner warn">'+esc(S.dbErr)+'</div>':"")+(S.asReader?'<div class="banner">Estás viendo la página como la ve un lector: sin botones de edición ni carga de stock. <button class="btn sm" data-act="toggleReader">Volver a edición</button></div>':"")+(S.local?'<div class="banner warn">Vista local.</div>':"")+V();
-  if(S.drawer&&S.drawer.type!=="form")openDrawer(S.drawer,true);
+  if(S.drawer&&["form","pass","login"].indexOf(S.drawer.type)<0)openDrawer(S.drawer,true);
 }
 
 /* ---------- Resumen ---------- */
@@ -629,6 +641,12 @@ function vCarga(){
     }
   }
   h+=shareP;
+  if(!HAS_GAS){const me=S.me&&S.me.user;const list=(S.admins||[]).slice().sort((a,b)=>a.user.localeCompare(b.user));
+    h+='<section class="panel" id="admPanel"><div class="panel-h"><h3>Administradores</h3><div class="tools"><span class="muted" style="font-size:12px">Conectado como <b>'+esc(me||"")+'</b></span><button class="btn sm" data-act="myPass">Cambiar mi clave</button></div></div>'+
+    (S.newAdm?'<div class="panel-b"><div class="banner" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">Clave provisional de <b>'+esc(S.newAdm.user)+'</b>: <code style="font-family:var(--f-mono);font-size:14px;background:var(--surface);padding:2px 8px;border-radius:6px;user-select:all">'+esc(S.newAdm.pass)+'</code> Pásasela por un canal privado; al entrar tendrá que crear su propia clave. Esta es la única vez que se muestra. <button class="btn sm" data-act="hideNew">Listo</button></div></div>':'')+
+    (list.length?'<div class="tw"><table><thead><tr><th>Usuario</th><th>Nombre</th><th>Estado</th><th></th></tr></thead><tbody>'+list.map(r=>'<tr><td class="mono">'+esc(r.user)+(r.user===me?' <span class="chip info">tú</span>':'')+'</td><td>'+esc(r.name||"")+'</td><td>'+(r.mustChange?'<span class="chip warn">Clave provisional</span>':'<span class="chip ok">Activo</span>')+'</td><td style="text-align:right">'+
+      (S.admDel===r.user?'<span class="confirm" style="display:inline-flex">¿Eliminar a '+esc(r.user)+'? <button class="btn sm danger" data-act="admDelYes">Sí</button><button class="btn sm" data-act="admDelNo">No</button></span>':(r.user===me?'':'<div class="tools" style="justify-content:flex-end"><button class="btn sm" data-act="admReset" data-u="'+esc(r.user)+'">Restablecer clave</button><button class="btn sm danger" data-act="admDel" data-u="'+esc(r.user)+'">Eliminar</button></div>'))+'</td></tr>').join("")+'</tbody></table></div>':'<div class="panel-b muted">Aún no hay administradores guardados. '+(me?'Crea tu clave personal con “Cambiar mi clave”.':'')+'</div>')+
+    '<form id="admForm" class="panel-b" novalidate style="border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px"><h3>Agregar administrador</h3><div class="grid-f"><label class="f">Usuario<input class="inp" id="naUser" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ej. maria.tirado"></label><label class="f">Nombre<input class="inp" id="naName" autocomplete="off" placeholder="María Tirado"></label><label class="f">Clave provisional<input class="inp" id="naPass" type="text" autocomplete="off" placeholder="Mínimo 8 caracteres"></label></div><div id="naErr" role="alert"></div><div class="tools"><button type="button" class="btn" data-act="genPass">Generar clave</button><button type="submit" class="btn pri">Agregar administrador</button></div><p class="foot" style="margin:0">El nuevo administrador entra con su usuario y la clave provisional, y la página le pide crear la suya.</p></form></section>'}
   // historial
   const log=(S.log||[]).slice().reverse();
   h+='<div class="two"><section class="panel"><div class="panel-h"><h3>Historial de cargas</h3>'+sparkline(S.log||[])+'</div>'+(log.length?'<div class="tw" style="max-height:320px"><table><thead><tr><th>Cargado</th><th>Fecha stock</th><th>Archivo</th><th class="n">SKUs</th><th class="n">En cero</th></tr></thead><tbody>'+log.map(e=>'<tr><td>'+esc(new Date(e.cargado).toLocaleString("es-VE",{dateStyle:"short",timeStyle:"short"}))+'</td><td>'+esc(e.fechaStock||"")+'</td><td>'+esc(e.archivo||"")+'</td><td class="n">'+fmt0(e.total)+'</td><td class="n">'+fmt0(e.ceros)+'</td></tr>').join("")+'</tbody></table></div>':'<div class="empty">Sin cargas todavía.</div>')+'</section>';
@@ -636,9 +654,8 @@ function vCarga(){
     '<label class="f">Cobertura objetivo (semanas)<input class="inp" type="number" min="1" max="52" id="setCov" value="'+esc(S.settings.cobertura)+'" style="max-width:120px"></label>'+
     '<label class="f">Unidades de RRHH solicitantes (una por línea)<textarea class="inp" id="setUni">'+esc(S.settings.unidades.join("\n"))+'</textarea></label>'+
     '<label class="f">Proveedores (uno por línea). Los del stockstatus y los de los pedidos se agregan solos<textarea class="inp" id="setProv" style="min-height:120px">'+esc(provList().join("\n"))+'</textarea></label>'+
-    (!HAS_GAS?'<label class="f">Nueva clave de administrador (déjalo vacío para no cambiarla)<input class="inp" type="password" id="setPass" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></label>':'')+
     '<div><button class="btn pri" data-act="saveSet">Guardar ajustes</button></div>'+
-    '<p class="foot" style="margin:0">Todos ven la misma página. Quien conozca la clave entra como administrador con el botón de arriba; el resto solo puede consultar.</p></div></section></div>';
+    '<p class="foot" style="margin:0">Todos ven la misma página. Los administradores entran con su usuario y clave; el resto solo puede consultar.</p></div></section></div>';
   return h;
 }
 function sparkline(log){
@@ -718,15 +735,21 @@ function openDrawer(d,re){
       '<section class="panel"><div class="panel-h"><h3>Líneas del pedido</h3><span class="muted" style="font-size:12px">'+(p.lineas||[]).length+' SKUs</span></div><div class="tw"><table><thead><tr><th>SKU</th><th>Descripción</th><th class="n">Cantidad</th><th class="n">Cendis hoy</th></tr></thead><tbody>'+
       (p.lineas||[]).slice().sort((a,b)=>{const A=D.bySku[a.sku],B=D.bySku[b.sku];return A&&B?(A.modelo.localeCompare(B.modelo)||sizeKey(A.talla)-sizeKey(B.talla)):0}).map(l=>{const i=l.sku?D.bySku[l.sku]:null;return '<tr'+(i?' class="click" data-sku="'+esc(l.sku)+'"':'')+'><td class="mono">'+(l.sku?esc(l.sku):'<span class="chip warn">Sin SKU</span>')+'</td><td>'+esc(i?i.desc:(l.desc||"SKU no está en el stockstatus"))+'</td><td class="n"><b>'+fmt0(l.cant)+'</b></td><td class="n">'+(i?fmt0(i.cendis):"—")+'</td></tr>'}).join("")+'</tbody><tfoot><tr><td colspan="2">Total</td><td class="n">'+fmt0(c.total)+'</td><td></td></tr></tfoot></table></div></section>';
   }else if(d.type==="login"){title="Entrar como administrador";
-    body='<form id="loginForm" class="panel" novalidate><div class="panel-b" style="display:flex;flex-direction:column;gap:12px"><p style="margin:0">'+(HAS_GAS?'Escribe la clave que tienes asignada en la pestaña <b>Admins</b> de la hoja de datos (columna <b>clave</b>). La sesión dura 6 horas en este navegador.':'Escribe la clave de administrador para actualizar datos y editar pedidos.')+'</p>'+(!HAS_GAS?'<label class="f">Tu nombre (queda en el historial de cambios)<input class="inp" id="admName" value="'+esc(lsGet("uf_name","")||"")+'" autocomplete="name"></label>':'')+''+
+    body='<form id="loginForm" class="panel" novalidate><div class="panel-b" style="display:flex;flex-direction:column;gap:12px"><p style="margin:0">Escribe tu usuario y tu clave de administrador.</p>'+
+    '<label class="f">Usuario<input class="inp" id="admUser" autocomplete="username" autocapitalize="off" spellcheck="false" value="'+esc(lsGet("uf_user","")||"")+'" placeholder="ej. carlosj.perez"></label>'+
     '<label class="f">Clave<input class="inp" type="password" id="admPass" autocomplete="current-password"></label><div id="loginErr" class="muted" role="alert"></div>'+
     '<div class="tools"><button type="submit" class="btn pri" id="loginGo">Entrar</button><button type="button" class="btn" data-act="close">Cancelar</button></div>'+
-    (HAS_GAS?'<p class="foot" style="margin:0">Correo detectado por Google: <b>'+esc(S.email||"no disponible")+'</b>. Si tu correo está en la pestaña Admins y Google lo detecta, entras como administrador sin clave.</p>':'')+'</div></form>';
+    '<p class="foot" style="margin:0">¿Olvidaste tu clave? Pide a otro administrador que te la restablezca en Actualizar datos › Administradores.</p></div></form>';
+  }else if(d.type==="pass"){title=d.force?"Crea tu clave personal":"Cambiar mi clave";
+    body='<form id="passForm" class="panel" novalidate><div class="panel-b" style="display:flex;flex-direction:column;gap:12px">'+(d.force?'<p style="margin:0">Entraste con una clave provisional. Crea tu clave personal para seguir; la provisional deja de funcionar.</p>':'')+
+    '<label class="f">Nueva clave (mínimo 8 caracteres)<input class="inp" type="password" id="np1" autocomplete="new-password"></label><label class="f">Repite la nueva clave<input class="inp" type="password" id="np2" autocomplete="new-password"></label><div id="passErr" role="alert"></div>'+
+    '<div class="tools"><button type="submit" class="btn pri" id="passGo">Guardar clave</button>'+(d.force?'':'<button type="button" class="btn" data-act="close">Cancelar</button>')+'</div></div></form>';
   }else if(d.type==="form"){title=d.data.id&&S.pedidos.some(p=>p.id===d.data.id)?"Editar pedido":"Nuevo pedido";body=formHTML(d.data)}
   root.innerHTML='<div class="ov" data-act="close"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="'+esc(title)+'"><div class="dr-h"><div style="min-width:0"><h2>'+esc(title)+'</h2><div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+sub+'</div></div><div class="tools">'+actions+'<button class="btn sm" data-act="close" aria-label="Cerrar">Cerrar</button></div></div><div class="dr-b" id="drBody">'+body+'</div></aside>';
   if(d.type==="ped")showUpdBy(d.id);
   if(d.type==="form"&&!re)setTimeout(()=>{const x=$("#pOc");x&&x.focus()},30);
-  if(d.type==="login")setTimeout(()=>{const x=$("#admPass");x&&x.focus()},30);
+  if(d.type==="login")setTimeout(()=>{const x=$("#admUser");x&&(x.value?$("#admPass").focus():x.focus())},30);
+  if(d.type==="pass")setTimeout(()=>{const x=$("#np1");x&&x.focus()},30);
 }
 async function showUpdBy(id){const p=S.pedidos.find(x=>x.id===id);const el=$("#updBy");if(!p||!el||!p.updatedAt)return;
   const name=p.updatedBy&&String(p.updatedBy).includes("@")?p.updatedBy:"";
@@ -828,6 +851,7 @@ document.addEventListener("click",async ev=>{
   const t=ev.target.closest("[data-act],[data-go],[data-fam],[data-ped],[data-sku]");if(!t)return;
   const a=t.dataset.act;
   if(a){
+    if((a==="close"||a==="cancelForm")&&S.drawer&&S.drawer.type==="pass"&&S.drawer.force)return;
     if(a==="close"||a==="cancelForm"){d_rec=null;closeDrawer();return}
     if(a==="newPed"){openDrawer({type:"form",data:blankPed(t.dataset.famp||S.f.cero.fam||S.fam)});return}
     if(a==="editPed"){const p=S.pedidos.find(x=>x.id===t.dataset.id);openDrawer({type:"form",data:JSON.parse(JSON.stringify(p))});return}
@@ -849,28 +873,34 @@ document.addEventListener("click",async ev=>{
     if(a==="confirmUp"){confirmUpload();return}
     if(a==="cancelUp"){S.preview=null;render();return}
     if(a==="saveSet"){const cov=Math.max(1,Math.min(52,Math.round(num($("#setCov").value))||12));const un=$("#setUni").value.split("\n").map(s=>s.trim()).filter(Boolean);
-      const s={cobertura:cov,unidades:un,proveedores:($("#setProv")?$("#setProv").value.split("\n").map(x=>x.trim()).filter(Boolean):(S.settings.proveedores||[]))};if(!HAS_GAS){S.settings=s;const np=$("#setPass")&&$("#setPass").value.trim();
-        if(np){if(np.length<8){toast("La clave debe tener al menos 8 caracteres");return}S.adminHash=sha256(np);S.pass=np;if(GH.token&&CRYPTO_OK){S.gh=Object.assign({},S.gh,{tokenEnc:await encTok(GH.token,np)})}}
-        persist();render();toast(np?"Clave cambiada. Usa la nueva clave desde ahora":"Ajustes guardados");return}
+      const s={cobertura:cov,unidades:un,proveedores:($("#setProv")?$("#setProv").value.split("\n").map(x=>x.trim()).filter(Boolean):(S.settings.proveedores||[]))};if(!HAS_GAS){S.settings=s;persist();render();toast("Ajustes guardados");return}
       try{await api("guardarAjustes",s,TOKEN);toast("Ajustes guardados");await refresh(true)}catch(e){toast(errMsg(e))}return}
     if(a==="login"){openDrawer({type:"login"});return}
     if(a==="dlJson"){downloadJSON();return}
     if(a==="pubNow"){GH.status="";if(GH.token)publish();else downloadJSON();return}
     if(a==="goGh"){go("carga");setTimeout(()=>{const x=$("#ghPanel");x&&x.scrollIntoView({behavior:"smooth"})},50);return}
-    if(a==="ghOff"){GH.token=null;S.gh=Object.assign({},S.gh,{tokenEnc:null});try{sessionStorage.removeItem("uf_gh")}catch(e){}toast("Publicación automática desconectada en este navegador");render();return}
+    if(a==="ghOff"){GH.token=null;S.gh=Object.assign({},S.gh,{tokenEnc:null,tokenK:null});saveSession();persist();toast("Publicación automática desconectada");render();return}
     if(a==="ghConnect"){const owner=$("#ghOwner").value.trim(),repo=$("#ghRepoIn").value.trim(),branch=$("#ghBranch").value.trim()||"main",tok=$("#ghTok").value.trim();
       if(!owner||!repo||!tok){toast("Completa usuario, repositorio y token");return}
-      if(!S.pass){toast("Vuelve a entrar como administrador para conectar");return}
+      if(!S.me){toast("Vuelve a entrar como administrador para conectar");return}
       t.disabled=true;t.textContent="Conectando…";const prev=S.gh;S.gh={owner,repo,branch};GH.token=tok;
       try{const j=await ghApi("");if(j.permissions&&!j.permissions.push)throw new Error("El token no tiene permiso de escritura en "+owner+"/"+repo+".");
-        S.gh.tokenEnc=await encTok(tok,S.pass);try{sessionStorage.setItem("uf_gh",tok)}catch(e){}
+        if(!S.K){S.K=rndKey();const me=adminRec(S.me.user);if(me&&S.pass)me.kEnc=await encTok(S.K,S.pass)}S.gh.tokenK=await encTok(tok,S.K);S.gh.tokenEnc=null;saveSession();
+        if(!adminRec(S.me.user))toast("Crea tu clave personal para que la conexión quede guardada");
         persist();toast("GitHub conectado. Publicando…")}
       catch(e){GH.token=null;S.gh=prev;toast(e.message||"No se pudo conectar");t.disabled=false;t.textContent="Conectar y publicar"}
       render();return}
+    if(a==="myPass"){openDrawer({type:"pass",force:false});return}
+    if(a==="genPass"){const x=$("#naPass");if(x){x.value=rndPass();x.type="text"}return}
+    if(a==="admReset"){const u=t.dataset.u;const r=adminRec(u);if(!r)return;const pw=rndPass();r.hash=uHash(u,pw);r.mustChange=true;r.actualizado=new Date().toISOString();if(CRYPTO_OK&&S.K)r.kEnc=await encTok(S.K,pw);else delete r.kEnc;S.newAdm={user:u,pass:pw};persist();render();toast("Clave de "+u+" restablecida");return}
+    if(a==="admDel"){S.admDel=t.dataset.u;render();return}
+    if(a==="admDelNo"){S.admDel=null;render();return}
+    if(a==="admDelYes"){const u=S.admDel;S.admDel=null;S.admins=(S.admins||[]).filter(x=>x.user!==u);persist();render();toast("Administrador "+u+" eliminado");return}
+    if(a==="hideNew"){S.newAdm=null;render();return}
     if(a==="plantilla"){downloadTemplate();return}
     if(a==="cancelPed"){S.pedPrev=null;render();return}
     if(a==="confirmPed"){applyPedImport();return}
-    if(a==="logout"&&!HAS_GAS){if(S.dirty&&GH.token&&!GH.busy)publish();S.isAdmin=false;S.via="";S.asReader=false;S.pass=null;GH.token=null;try{sessionStorage.removeItem("uf_gh");sessionStorage.removeItem("uf_adm")}catch(e){}if(S.view==="carga")setView("resumen");else render();toast("Saliste del modo administrador");return}
+    if(a==="logout"&&!HAS_GAS){if(S.dirty&&GH.token&&!GH.busy)publish();S.isAdmin=false;S.via="";S.asReader=false;S.pass=null;S.K=null;S.me=null;GH.token=null;try{sessionStorage.removeItem("uf_gh");sessionStorage.removeItem("uf_adm")}catch(e){}if(S.view==="carga")setView("resumen");else render();toast("Saliste del modo administrador");return}
     if(a==="logout"){const t0=TOKEN;TOKEN="";lsSet("uf_tok","");try{await api("salirAdmin",t0)}catch(e){}await refresh(true);toast("Saliste del modo administrador");return}
     if(a==="toggleReader"){S.asReader=!S.asReader;closeDrawer();if(S.asReader&&S.view==="carga")setView("resumen");else render();return}
     if(a==="copyCero"){const r=ceroRows();const tsv=["Prioridad\tSKU\tDescripción\tFamilia\tProveedor\tCendis\tEn tránsito\tDemanda semanal\tSugerido\tCase pack\tBase"].concat(r.map(i=>[i.prio||"Bajo",i.sku,i.desc,i.fam,i.prov,i.cendis,i.transito,String(Math.round(i.dem*100)/100).replace(".",","),i.sug,i.cp,i.base].join("\t"))).join("\n");
@@ -882,14 +912,31 @@ document.addEventListener("click",async ev=>{
   if(t.dataset.ped){d_rec=null;openDrawer({type:"ped",id:t.dataset.ped});return}
   if(t.dataset.sku){openDrawer({type:"sku",sku:t.dataset.sku});return}
 });
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&S.drawer&&S.drawer.type!=="form")closeDrawer();if(e.key==="Enter"&&e.target.classList.contains("g-row"))e.target.click()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&S.drawer&&S.drawer.type!=="form"&&!(S.drawer.type==="pass"&&S.drawer.force))closeDrawer();if(e.key==="Enter"&&e.target.classList.contains("g-row"))e.target.click()});
 document.addEventListener("submit",async e=>{if(e.target.id==="pedForm"){e.preventDefault();savePed()}
-  if(e.target.id==="loginForm"&&!HAS_GAS){e.preventDefault();const pass=$("#admPass").value.trim();const nm=($("#admName")&&$("#admName").value.trim())||"";
-    if(!S.adminHash||sha256(pass)!==S.adminHash){const m=$("#loginErr");if(m){m.textContent="Clave incorrecta.";m.style.color="var(--crit)"}return}
-    S.isAdmin=true;S.via="clave";S.asReader=false;S.pass=pass;S.email=nm||"";lsSet("uf_name",nm);
-    if(S.gh&&S.gh.tokenEnc&&CRYPTO_OK){try{GH.token=await decTok(S.gh.tokenEnc,pass);try{sessionStorage.setItem("uf_gh",GH.token)}catch(x){}}catch(x){GH.token=null}}
-    try{sessionStorage.setItem("uf_adm",JSON.stringify({h:S.adminHash,n:S.email}))}catch(x){}
-    closeDrawer();render();toast(GH.token?"Entraste como administrador. Tus cambios se publican solos":"Entraste como administrador");return}
+  if(e.target.id==="loginForm"&&!HAS_GAS){e.preventDefault();const u=$("#admUser").value.trim().toLowerCase(),pass=$("#admPass").value;const err=m=>{const x=$("#loginErr");if(x){x.textContent=m;x.style.color="var(--crit)"}};
+    if(!u||!pass){err("Escribe usuario y clave.");return}
+    const r=adminRec(u);const h=uHash(u,pass);let ok=false,force=false;
+    if(r){ok=r.hash===h;force=!!r.mustChange}
+    else if(u===BUILTIN.user&&h===BUILTIN.hash){ok=true;force=true}
+    else if(!(S.admins||[]).length&&S.adminHash&&sha256(pass)===S.adminHash){ok=true;force=true}
+    if(!ok){err(r||u===BUILTIN.user?"Clave incorrecta.":"Ese usuario no existe.");return}
+    const b=$("#loginGo");b.disabled=true;b.textContent="Entrando…";
+    S.isAdmin=true;S.via="clave";S.asReader=false;S.pass=pass;S.me={user:u,name:(r&&r.name)||(u===BUILTIN.user?BUILTIN.name:u)};S.email=S.me.name;lsSet("uf_user",u);
+    S.K=null;GH.token=null;
+    if(CRYPTO_OK){try{if(r&&r.kEnc)S.K=await decTok(r.kEnc,pass)}catch(x){S.K=null}
+      try{if(S.K&&S.gh&&S.gh.tokenK)GH.token=await decTok(S.gh.tokenK,S.K);else if(S.gh&&S.gh.tokenEnc)GH.token=await decTok(S.gh.tokenEnc,pass)}catch(x){GH.token=null}}
+    saveSession();closeDrawer();render();
+    if(force){openDrawer({type:"pass",force:true});return}
+    toast(GH.token?"Hola "+S.me.name+". Tus cambios se publican solos":"Hola "+S.me.name);return}
+  if(e.target.id==="passForm"){e.preventDefault();const a1=$("#np1").value,a2=$("#np2").value;const err=m=>{const x=$("#passErr");if(x){x.textContent=m;x.style.color="var(--crit)"}};
+    if(a1.length<8){err("La clave debe tener al menos 8 caracteres.");return}if(a1!==a2){err("Las dos claves no coinciden.");return}
+    const b=$("#passGo");b.disabled=true;b.textContent="Guardando…";await setMyPass(a1);S.drawer=null;closeDrawer();render();toast(GH.token?"Clave guardada y publicada":"Clave guardada. Publica los cambios para que quede activa");return}
+  if(e.target.id==="admForm"){e.preventDefault();const u=$("#naUser").value.trim().toLowerCase(),n=$("#naName").value.trim(),pw=$("#naPass").value.trim();const err=m=>{const x=$("#naErr");if(x){x.textContent=m;x.style.color="var(--crit)"}};
+    if(!/^[a-z0-9._-]{3,40}$/.test(u)){err("Usuario: solo letras, números, punto o guion (3 a 40).");return}if(adminRec(u)){err("Ese usuario ya existe.");return}if(pw.length<8){err("La clave provisional debe tener al menos 8 caracteres.");return}
+    const now=new Date().toISOString();const r={user:u,name:n||u,hash:uHash(u,pw),mustChange:true,creado:now,creadoPor:S.me&&S.me.user||""};
+    if(CRYPTO_OK){if(!S.K){S.K=rndKey();const me=adminRec(S.me.user);if(me&&S.pass)me.kEnc=await encTok(S.K,S.pass);if(GH.token&&!(S.gh&&S.gh.tokenK))S.gh=Object.assign({},S.gh,{tokenK:await encTok(GH.token,S.K),tokenEnc:null})}r.kEnc=await encTok(S.K,pw)}
+    S.admins=(S.admins||[]).concat([r]);S.newAdm={user:u,pass:pw};persist();render();toast("Administrador "+u+" creado");return}
   if(e.target.id==="loginForm"){e.preventDefault();const b=$("#loginGo");b.disabled=true;b.textContent="Verificando…";
     try{TOKEN=await api("entrarAdmin",$("#admPass").value);lsSet("uf_tok",TOKEN);closeDrawer();S.asReader=false;await refresh(true);toast(S.isAdmin?"Entraste como administrador":"No se pudo activar el modo administrador")}
     catch(err){const m=$("#loginErr");if(m){m.textContent=errMsg(err);m.style.color="var(--crit)"}b.disabled=false;b.textContent="Entrar"}}});
@@ -1002,7 +1049,7 @@ setView("resumen");
   if(!HAS_GAS){
     if(EMB)applyData(EMB);
     if(location.protocol!=="file:"){try{const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),5000);const r=await fetch("datos.json?t="+Date.now(),{cache:"no-store",signal:ctl.signal});clearTimeout(tm);if(r.ok){const d=await r.json();if((d.actualizado||"")>=(S.actualizado||""))applyData(d)}}catch(e){}}
-    try{const a=JSON.parse(sessionStorage.getItem("uf_adm")||"null");if(a&&a.h===S.adminHash){S.isAdmin=true;S.via="clave";S.email=a.n||"";GH.token=sessionStorage.getItem("uf_gh")||null}}catch(e){}
+    try{const a=JSON.parse(sessionStorage.getItem("uf_adm")||"null");if(a&&a.u){const r=adminRec(a.u);if((r&&r.hash===a.h)||(!r&&a.u===BUILTIN.user&&a.h===BUILTIN.hash)){S.isAdmin=true;S.via="clave";S.me={user:a.u,name:a.n||a.u};S.email=S.me.name;S.K=a.k||null;GH.token=a.t||null}}}catch(e){}
     S.ready.stock=true;S.ready.ped=true;render();
     await pullRemote();
     setInterval(()=>{if(!document.hidden)pullRemote()},60000);
