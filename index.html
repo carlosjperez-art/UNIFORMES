@@ -498,10 +498,10 @@ function vFamilias(){
   // matriz
   const mods={};f.items.forEach(i=>(mods[i.modelo]=mods[i.modelo]||[]).push(i));
   const sizes=[...new Set(f.items.map(i=>i.talla))].sort((a,b)=>sizeKey(a)-sizeKey(b));
-  h+='<section class="panel"><div class="panel-h"><h3>Matriz de tallas · Stock Cendis</h3><div class="legend"><span><i class="h-ok"></i>OK</span><span><i class="h-low"></i>&lt; 4 sem</span><span><i class="h-zero"></i>Cero</span><span>Número pequeño: semanas de cobertura</span></div></div><div class="tw"><table class="matrix"><thead><tr><th style="text-align:left">Modelo</th>'+sizes.map(s=>'<th>'+esc(s)+'</th>').join("")+'<th class="n">Total</th></tr></thead><tbody>'+
+  h+='<section class="panel"><div class="panel-h"><h3>Matriz de tallas · Stock Cendis</h3><div class="legend"><span><i class="h-ok"></i>OK</span><span><i class="h-low"></i>&lt; 4 sem</span><span><i class="h-zero"></i>Cero</span></div></div><div class="tw"><table class="matrix"><thead><tr><th style="text-align:left">Modelo</th>'+sizes.map(s=>'<th>'+esc(s)+'</th>').join("")+'<th class="n">Total</th></tr></thead><tbody>'+
     Object.keys(mods).sort().map(m=>{const row=mods[m];const bt={};row.forEach(i=>bt[i.talla]=i);
       return '<tr><td class="m">'+esc(m)+'<div class="muted" style="font-weight:400;font-size:11px">'+esc(row[0].prov)+' · '+(/CENDIS/i.test(row[0].sub)?"Personal Cendis":"Personal de tienda")+'</div></td>'+sizes.map(s=>{const i=bt[s];if(!i)return '<td></td>';
-        return '<td><button class="cell '+i.estado+'" data-sku="'+esc(i.sku)+'" title="'+esc(i.desc)+' · En tránsito '+fmt0(i.transito)+' · Sugerido '+fmt0(i.sug)+'">'+fmt0(i.cendis)+'<small>'+(isFinite(i.cobertura)?(i.cobertura>=52?"52+ sem":fmt(Math.round(i.cobertura*10)/10)+" sem"):"sin consumo")+'</small></button></td>'}).join("")+'<td class="n"><b>'+fmt0(row.reduce((a,i)=>a+i.cendis,0))+'</b></td></tr>'}).join("")+'</tbody></table></div></section>';
+        return '<td><button class="cell '+i.estado+'" data-sku="'+esc(i.sku)+'" title="'+esc(i.desc)+' · En tránsito '+fmt0(i.transito)+' · Sugerido '+fmt0(i.sug)+'">'+fmt0(i.cendis)+'</button></td>'}).join("")+'<td class="n"><b>'+fmt0(row.reduce((a,i)=>a+i.cendis,0))+'</b></td></tr>'}).join("")+'</tbody></table></div></section>';
   // pedidos de la familia
   const ps=(f.ped||[]).slice().sort((a,b)=>(b.fechaSolicitud||"").localeCompare(a.fechaSolicitud||""));
   h+='<section class="panel"><div class="panel-h"><h3>Pedidos de '+esc(f.name.toLowerCase())+'</h3><span class="muted" style="font-size:12px">'+ps.length+' pedidos</span></div>'+(ps.length?pedTable(ps):'<div class="empty"><b>Sin pedidos para esta familia</b>'+(S.canEdit?'Crea uno con el botón de arriba o desde la sugerencia de Stock en cero.':'')+'</div>')+'</section>';
@@ -635,6 +635,7 @@ function vCarga(){
   h+='<section class="panel"><div class="panel-h"><h3>Ajustes</h3></div><div class="panel-b" style="display:flex;flex-direction:column;gap:12px">'+
     '<label class="f">Cobertura objetivo (semanas)<input class="inp" type="number" min="1" max="52" id="setCov" value="'+esc(S.settings.cobertura)+'" style="max-width:120px"></label>'+
     '<label class="f">Unidades de RRHH solicitantes (una por línea)<textarea class="inp" id="setUni">'+esc(S.settings.unidades.join("\n"))+'</textarea></label>'+
+    '<label class="f">Proveedores (uno por línea). Los del stockstatus y los de los pedidos se agregan solos<textarea class="inp" id="setProv" style="min-height:120px">'+esc(provList().join("\n"))+'</textarea></label>'+
     (!HAS_GAS?'<label class="f">Nueva clave de administrador (déjalo vacío para no cambiarla)<input class="inp" type="password" id="setPass" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></label>':'')+
     '<div><button class="btn pri" data-act="saveSet">Guardar ajustes</button></div>'+
     '<p class="foot" style="margin:0">Todos ven la misma página. Quien conozca la clave entra como administrador con el botón de arriba; el resto solo puede consultar.</p></div></section></div>';
@@ -760,17 +761,20 @@ function cumChart(p,c){
 }
 
 /* ---------- Formulario de pedido ---------- */
+function provList(){const m={};const add=x=>{x=String(x||"").trim();if(x&&!m[x.toLowerCase()])m[x.toLowerCase()]=x};
+  (S.settings.proveedores||[]).forEach(add);S.pedidos.forEach(p=>add(p.proveedor));D.items.forEach(i=>add(i.prov));
+  return Object.values(m).sort((a,b)=>a.localeCompare(b))}
 function blankPed(fam,lineas){return {id:"p"+uidGen(),oc:"",familia:fam||(D.fams[0]&&D.fams[0].name)||"",proveedor:"",solicitante:"",unidad:"",destino:"Tiendas",fechaSolicitud:todayStr(),estado:"Solicitado",notas:"",lineas:lineas||[],entregas:[]}}
 function formHTML(p){
   const famItems=D.items.filter(i=>i.fam===p.familia).sort((a,b)=>a.modelo.localeCompare(b.modelo)||sizeKey(a.talla)-sizeKey(b.talla));
-  const provs=[...new Set(D.items.map(i=>i.prov))].sort();const mods=[...new Set(famItems.map(i=>i.modelo))];
+  const provs=provList();const mods=[...new Set(famItems.map(i=>i.modelo))];
   const skuOpt=v=>'<option value="">Elige SKU…</option>'+famItems.map(i=>'<option value="'+esc(i.sku)+'"'+(String(v)===i.sku?' selected':'')+'>'+esc(i.modelo+" · "+i.talla)+' (Cendis '+fmt0(i.cendis)+')</option>').join("");
   const tot=p.lineas.reduce((a,l)=>a+num(l.cant),0),plan=p.entregas.reduce((a,e)=>a+num(e.cant),0);
   return '<form id="pedForm" style="display:flex;flex-direction:column;gap:16px" novalidate>'+
   '<section class="panel"><div class="panel-h"><h3>Datos del pedido</h3></div><div class="panel-b grid-f">'+
    '<label class="f">Nº de pedido / OC<input class="inp" id="pOc" value="'+esc(p.oc)+'" placeholder="Ej. OC-450012345"></label>'+
    '<label class="f">Familia<select class="inp" id="pFam">'+D.fams.map(f=>'<option'+(f.name===p.familia?' selected':'')+'>'+esc(f.name)+'</option>').join("")+'</select></label>'+
-   '<label class="f">Proveedor<input class="inp" id="pProv" list="dlProv" value="'+esc(p.proveedor)+'"></label>'+
+   '<label class="f">Proveedor<select class="inp" id="pProvSel"><option value="">Elige proveedor…</option>'+provs.map(x=>'<option'+(x===p.proveedor?' selected':'')+'>'+esc(x)+'</option>').join("")+(p.proveedor&&provs.indexOf(p.proveedor)<0?'<option selected>'+esc(p.proveedor)+'</option>':'')+'<option value="__new__">+ Agregar proveedor nuevo…</option></select><input class="inp" id="pProvNew" placeholder="Nombre del proveedor nuevo" hidden style="margin-top:6px"></label>'+
    '<label class="f">Solicitante<input class="inp" id="pSol" value="'+esc(p.solicitante)+'" placeholder="Nombre de quien solicita"></label>'+
    '<label class="f">Unidad de RRHH que lo gestiona<input class="inp" id="pUni" list="dlUni" value="'+esc(p.unidad)+'"></label>'+
    '<label class="f">Destino<select class="inp" id="pDest">'+["Tiendas","Cendis","Oficina central"].map(x=>'<option'+(x===p.destino?' selected':'')+'>'+x+'</option>').join("")+'</select></label>'+
@@ -778,7 +782,7 @@ function formHTML(p){
    '<label class="f">Tipo<select class="inp" id="pTipo">'+["Requerimiento","Pedido anual"].map(x=>'<option'+(x===(p.tipo||"Requerimiento")?' selected':'')+'>'+x+'</option>').join("")+'</select></label>'+
    '<label class="f">Estado<select class="inp" id="pEst">'+ESTADOS.map(x=>'<option'+(x===p.estado?' selected':'')+'>'+x+'</option>').join("")+'</select></label>'+
    '<label class="f" style="grid-column:1/-1">Notas<textarea class="inp" id="pNot">'+esc(p.notas)+'</textarea></label>'+
-   '<datalist id="dlProv">'+provs.map(x=>'<option value="'+esc(x)+'">').join("")+'</datalist><datalist id="dlUni">'+S.settings.unidades.map(x=>'<option value="'+esc(x)+'">').join("")+'</datalist></div></section>'+
+   '<datalist id="dlUni">'+S.settings.unidades.map(x=>'<option value="'+esc(x)+'">').join("")+'</datalist></div></section>'+
   '<section class="panel"><div class="panel-h"><h3>Líneas · '+fmt0(tot)+' unidades</h3><div class="tools"><select class="inp" id="pMod"><option value="">Agregar todas las tallas de un modelo…</option>'+mods.map(m=>'<option>'+esc(m)+'</option>').join("")+'</select><button type="button" class="btn sm" data-act="addLine">+ Línea</button></div></div><div class="panel-b lines-ed">'+
    (p.lineas.length?p.lineas.map((l,k)=>'<div class="line-row">'+(!l.sku&&l.desc?'<div class="inp" style="display:flex;align-items:center;gap:6px"><span class="chip warn">Sin SKU</span>'+esc(l.desc)+'</div>':'<select class="inp" data-l="'+k+'" data-k="sku" aria-label="SKU">'+skuOpt(l.sku)+'</select>')+'<input class="inp" type="number" min="0" data-l="'+k+'" data-k="cant" value="'+esc(l.cant)+'" aria-label="Cantidad"><button type="button" class="btn sm danger" data-act="delLine" data-k="'+k+'" aria-label="Quitar línea">×</button></div>').join(""):'<div class="muted">Sin líneas. Agrega SKUs o todas las tallas de un modelo (se precargan con la sugerencia de compra).</div>')+
   '</div></section>'+
@@ -789,7 +793,7 @@ function formHTML(p){
   '</form>';
 }
 function readForm(){const p=S.drawer.data;const v=id=>{const x=$("#"+id);return x?x.value:""};
-  Object.assign(p,{oc:v("pOc").trim(),proveedor:v("pProv").trim(),solicitante:v("pSol").trim(),unidad:v("pUni").trim(),destino:v("pDest"),fechaSolicitud:v("pFec"),estado:v("pEst"),tipo:v("pTipo")||"Requerimiento",notas:v("pNot")});
+  Object.assign(p,{oc:v("pOc").trim(),proveedor:(v("pProvSel")==="__new__"?v("pProvNew"):v("pProvSel")).trim(),solicitante:v("pSol").trim(),unidad:v("pUni").trim(),destino:v("pDest"),fechaSolicitud:v("pFec"),estado:v("pEst"),tipo:v("pTipo")||"Requerimiento",notas:v("pNot")});
   document.querySelectorAll("#pedForm [data-l]").forEach(el=>{const l=p.lineas[+el.dataset.l];if(l)l[el.dataset.k]=el.dataset.k==="cant"?num(el.value):el.value});
   document.querySelectorAll("#pedForm [data-e]").forEach(el=>{const e=p.entregas[+el.dataset.e];if(e)e[el.dataset.k]=(el.dataset.k==="cant"||el.dataset.k==="recibida")?num(el.value):el.value});
   return p}
@@ -845,7 +849,7 @@ document.addEventListener("click",async ev=>{
     if(a==="confirmUp"){confirmUpload();return}
     if(a==="cancelUp"){S.preview=null;render();return}
     if(a==="saveSet"){const cov=Math.max(1,Math.min(52,Math.round(num($("#setCov").value))||12));const un=$("#setUni").value.split("\n").map(s=>s.trim()).filter(Boolean);
-      const s={cobertura:cov,unidades:un};if(!HAS_GAS){S.settings=s;const np=$("#setPass")&&$("#setPass").value.trim();
+      const s={cobertura:cov,unidades:un,proveedores:($("#setProv")?$("#setProv").value.split("\n").map(x=>x.trim()).filter(Boolean):(S.settings.proveedores||[]))};if(!HAS_GAS){S.settings=s;const np=$("#setPass")&&$("#setPass").value.trim();
         if(np){if(np.length<8){toast("La clave debe tener al menos 8 caracteres");return}S.adminHash=sha256(np);S.pass=np;if(GH.token&&CRYPTO_OK){S.gh=Object.assign({},S.gh,{tokenEnc:await encTok(GH.token,np)})}}
         persist();render();toast(np?"Clave cambiada. Usa la nueva clave desde ahora":"Ajustes guardados");return}
       try{await api("guardarAjustes",s,TOKEN);toast("Ajustes guardados");await refresh(true)}catch(e){toast(errMsg(e))}return}
@@ -882,7 +886,7 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&S.drawer&&S.drawer.
 document.addEventListener("submit",async e=>{if(e.target.id==="pedForm"){e.preventDefault();savePed()}
   if(e.target.id==="loginForm"&&!HAS_GAS){e.preventDefault();const pass=$("#admPass").value.trim();const nm=($("#admName")&&$("#admName").value.trim())||"";
     if(!S.adminHash||sha256(pass)!==S.adminHash){const m=$("#loginErr");if(m){m.textContent="Clave incorrecta.";m.style.color="var(--crit)"}return}
-    S.isAdmin=true;S.via="clave";S.asReader=false;S.pass=pass;S.email=nm||"Administrador";lsSet("uf_name",nm);
+    S.isAdmin=true;S.via="clave";S.asReader=false;S.pass=pass;S.email=nm||"";lsSet("uf_name",nm);
     if(S.gh&&S.gh.tokenEnc&&CRYPTO_OK){try{GH.token=await decTok(S.gh.tokenEnc,pass);try{sessionStorage.setItem("uf_gh",GH.token)}catch(x){}}catch(x){GH.token=null}}
     try{sessionStorage.setItem("uf_adm",JSON.stringify({h:S.adminHash,n:S.email}))}catch(x){}
     closeDrawer();render();toast(GH.token?"Entraste como administrador. Tus cambios se publican solos":"Entraste como administrador");return}
@@ -890,6 +894,7 @@ document.addEventListener("submit",async e=>{if(e.target.id==="pedForm"){e.preve
     try{TOKEN=await api("entrarAdmin",$("#admPass").value);lsSet("uf_tok",TOKEN);closeDrawer();S.asReader=false;await refresh(true);toast(S.isAdmin?"Entraste como administrador":"No se pudo activar el modo administrador")}
     catch(err){const m=$("#loginErr");if(m){m.textContent=errMsg(err);m.style.color="var(--crit)"}b.disabled=false;b.textContent="Entrar"}}});
 document.addEventListener("change",async e=>{const id=e.target.id;
+  if(id==="pProvSel"){const n=$("#pProvNew");if(n){n.hidden=e.target.value!=="__new__";if(!n.hidden)n.focus()}return}
   if(id==="pFam"){const p=readForm();p.familia=e.target.value;p.lineas=p.lineas.filter(l=>{const i=D.bySku[l.sku];return (i&&i.fam===p.familia)||(!l.sku&&l.desc)});reForm();return}
   if(id==="pMod"){const p=readForm();const m=e.target.value;if(!m)return;const have=new Set(p.lineas.map(l=>String(l.sku)));
     D.items.filter(i=>i.modelo===m&&!have.has(i.sku)).sort((a,b)=>sizeKey(a.talla)-sizeKey(b.talla)).forEach(i=>p.lineas.push({sku:i.sku,cant:i.sug||0}));p.lineas=p.lineas.filter(l=>l.sku||l.desc);reForm();return}
@@ -997,7 +1002,7 @@ setView("resumen");
   if(!HAS_GAS){
     if(EMB)applyData(EMB);
     if(location.protocol!=="file:"){try{const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),5000);const r=await fetch("datos.json?t="+Date.now(),{cache:"no-store",signal:ctl.signal});clearTimeout(tm);if(r.ok){const d=await r.json();if((d.actualizado||"")>=(S.actualizado||""))applyData(d)}}catch(e){}}
-    try{const a=JSON.parse(sessionStorage.getItem("uf_adm")||"null");if(a&&a.h===S.adminHash){S.isAdmin=true;S.via="clave";S.email=a.n||"Administrador";GH.token=sessionStorage.getItem("uf_gh")||null}}catch(e){}
+    try{const a=JSON.parse(sessionStorage.getItem("uf_adm")||"null");if(a&&a.h===S.adminHash){S.isAdmin=true;S.via="clave";S.email=a.n||"";GH.token=sessionStorage.getItem("uf_gh")||null}}catch(e){}
     S.ready.stock=true;S.ready.ped=true;render();
     await pullRemote();
     setInterval(()=>{if(!document.hidden)pullRemote()},60000);
